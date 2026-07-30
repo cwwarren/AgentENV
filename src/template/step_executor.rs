@@ -79,11 +79,14 @@ impl TemplateStepExecutor {
                     // the classic builder: idempotent on an existing directory
                     // without touching its metadata, and ENOTDIR on a file.
                     // No cwd, because the current workdir may not exist.
-                    let script = format!("set -eu\nmkdir -p -- {}\n", shell_quote(&resolved));
+                    // /bin/mkdir directly, not through a shell: Docker creates
+                    // WORKDIR without one, and minimal images may not ship
+                    // bash (the e2b SDK injects `WORKDIR /home/user` into
+                    // every from_dockerfile build). Carried from PR #66.
                     let output = sandbox
                         .run_command_with_opts(
-                            "/bin/bash",
-                            &["-lc", &script],
+                            "/bin/mkdir",
+                            &["-p", "--", &resolved],
                             &ProcessOpts::default(),
                         )
                         .await
@@ -711,10 +714,10 @@ mod tests {
         assert_eq!(ctx.workdir, "/workspace");
         let commands = sandbox.commands();
         assert_eq!(commands.len(), 1);
-        assert!(
-            commands[0].1[1].contains(&shell_quote("/workspace")),
-            "WORKDIR must create the directory: {}",
-            commands[0].1[1]
+        assert_eq!(
+            (commands[0].0.as_str(), commands[0].1.as_slice()),
+            ("/bin/mkdir", ["-p", "--", "/workspace"].map(String::from).as_slice()),
+            "WORKDIR must create the directory without a shell"
         );
     }
 
@@ -737,10 +740,10 @@ mod tests {
         assert_eq!(ctx.workdir, "/a/b");
         let commands = sandbox.commands();
         assert_eq!(commands.len(), 2);
-        assert!(
-            commands[1].1[1].contains(&shell_quote("/a/b")),
-            "the second WORKDIR must create the resolved path: {}",
-            commands[1].1[1]
+        assert_eq!(
+            commands[1].1.last().map(String::as_str),
+            Some("/a/b"),
+            "the second WORKDIR must create the resolved path"
         );
     }
 }
